@@ -1,0 +1,289 @@
+name: NHL Automation System
+
+on:
+  schedule:
+    # Morning flow (UTC times - adjust for Paris timezone)
+    - cron: '50 5 * * *'  # 06:50 Paris - Store game stats
+    - cron: '0 6 * * *'   # 07:00 Paris - Settle and ROI
+    - cron: '20 5 * * *'  # 06:20 Paris - Morning report
+
+    # Midday flow
+    - cron: '0 11 * * *'  # 12:00 Paris - Train Poisson
+    - cron: '5 11 * * *'  # 12:05 Paris - Midday report
+
+    # Evening flow
+    - cron: '0 18 * * *'  # 19:00 Paris - Evening report
+
+  workflow_dispatch:  # Allow manual trigger
+    inputs:
+      job_type:
+        description: 'Job to run'
+        required: true
+        type: choice
+        options:
+          - all
+          - store_stats
+          - train_model
+          - morning_report
+          - midday_report
+          - evening_report
+          - settle_roi
+
+jobs:
+  store-game-stats:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event.schedule == '50 5 * * *') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.job_type == 'all' || github.event.inputs.job_type == 'store_stats'))
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Restore database
+        uses: actions/cache/restore@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
+          restore-keys: |
+            nhl-database-
+
+      - name: Run store_game_stats
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_ALERT_WEBHOOK_URL: ${{ secrets.DISCORD_ALERT_WEBHOOK_URL }}
+        run: |
+          python jobs/store_game_stats.py
+
+      - name: Save database
+        uses: actions/cache/save@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
+
+  settle-and-roi:
+    runs-on: ubuntu-latest
+    needs: store-game-stats
+    if: |
+      always() &&
+      ((github.event.schedule == '0 6 * * *') ||
+       (github.event_name == 'workflow_dispatch' &&
+        (github.event.inputs.job_type == 'all' || github.event.inputs.job_type == 'settle_roi')))
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Restore database
+        uses: actions/cache/restore@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
+          restore-keys: |
+            nhl-database-
+
+      - name: Run settle_and_roi
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_ALERT_WEBHOOK_URL: ${{ secrets.DISCORD_ALERT_WEBHOOK_URL }}
+        run: |
+          python jobs/settle_and_roi.py
+
+      - name: Save database
+        uses: actions/cache/save@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
+
+  morning-report:
+    runs-on: ubuntu-latest
+    needs: settle-and-roi
+    if: |
+      always() &&
+      ((github.event.schedule == '20 5 * * *') ||
+       (github.event_name == 'workflow_dispatch' &&
+        (github.event.inputs.job_type == 'all' || github.event.inputs.job_type == 'morning_report')))
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Restore database
+        uses: actions/cache/restore@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
+          restore-keys: |
+            nhl-database-
+
+      - name: Generate morning report
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_ALERT_WEBHOOK_URL: ${{ secrets.DISCORD_ALERT_WEBHOOK_URL }}
+        run: |
+          python jobs/generate_report.py morning
+
+      - name: Save database
+        uses: actions/cache/save@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
+
+  train-poisson:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event.schedule == '0 11 * * *') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.job_type == 'all' || github.event.inputs.job_type == 'train_model'))
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Restore database
+        uses: actions/cache/restore@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
+          restore-keys: |
+            nhl-database-
+
+      - name: Train Poisson model
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_ALERT_WEBHOOK_URL: ${{ secrets.DISCORD_ALERT_WEBHOOK_URL }}
+        run: |
+          python jobs/train_poisson.py
+
+      - name: Save database
+        uses: actions/cache/save@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
+
+  midday-report:
+    runs-on: ubuntu-latest
+    needs: train-poisson
+    if: |
+      always() &&
+      ((github.event.schedule == '5 11 * * *') ||
+       (github.event_name == 'workflow_dispatch' &&
+        (github.event.inputs.job_type == 'all' || github.event.inputs.job_type == 'midday_report')))
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Restore database
+        uses: actions/cache/restore@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
+          restore-keys: |
+            nhl-database-
+
+      - name: Generate midday report
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_ALERT_WEBHOOK_URL: ${{ secrets.DISCORD_ALERT_WEBHOOK_URL }}
+        run: |
+          python jobs/generate_report.py midday
+
+      - name: Save database
+        uses: actions/cache/save@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
+
+  evening-report:
+    runs-on: ubuntu-latest
+    if: |
+      (github.event.schedule == '0 18 * * *') ||
+      (github.event_name == 'workflow_dispatch' &&
+       (github.event.inputs.job_type == 'all' || github.event.inputs.job_type == 'evening_report'))
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Restore database
+        uses: actions/cache/restore@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
+          restore-keys: |
+            nhl-database-
+
+      - name: Generate evening report
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_ALERT_WEBHOOK_URL: ${{ secrets.DISCORD_ALERT_WEBHOOK_URL }}
+        run: |
+          python jobs/generate_report.py evening
+
+      - name: Save database
+        uses: actions/cache/save@v3
+        with:
+          path: nhl_automation.db
+          key: nhl-database-${{ github.sha }}
