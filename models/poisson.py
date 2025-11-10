@@ -16,13 +16,15 @@ class PoissonModel:
         self.lambda_home = None
         self.lambda_away = None
 
-    def train(self, lookback_days: int = LOOKBACK_DAYS, scope: str = "global") -> Dict[str, float]:
+    def train(self, lookback_days: int = LOOKBACK_DAYS, scope: str = "global", use_xg: bool = True) -> Dict[str, float]:
         """
         Train Poisson model on recent games.
+        Can use either actual goals or Expected Goals (xG) from Moneypuck.
 
         Args:
             lookback_days: Number of days to look back for training data
             scope: Model scope identifier (e.g., 'global', 'noon')
+            use_xg: Whether to use xG instead of actual goals (more accurate)
 
         Returns:
             Dictionary with lambda_home and lambda_away
@@ -34,13 +36,59 @@ class PoissonModel:
             print(f"⚠️ No games found in last {lookback_days} days")
             return {'lambda_home': 3.0, 'lambda_away': 2.7}
 
-        # Calculate average goals
-        home_goals = [g['home_score'] for g in recent_games]
-        away_goals = [g['away_score'] for g in recent_games]
+        # Parse meta JSON if stored as string
+        import json
+        for game in recent_games:
+            if isinstance(game.get('meta'), str):
+                try:
+                    game['meta'] = json.loads(game['meta'])
+                except:
+                    game['meta'] = {}
 
-        # Base lambdas
-        avg_home = np.mean(home_goals)
-        avg_away = np.mean(away_goals)
+        # Check if we have xG data available
+        has_xg_data = any(
+            g.get('meta', {}).get('advanced_stats', {}).get('home_xG') is not None
+            for g in recent_games
+        )
+
+        if use_xg and has_xg_data:
+            # Use Expected Goals (xG) - more accurate!
+            print(f"🎯 Using xG data for training (more accurate)")
+
+            home_values = []
+            away_values = []
+
+            for g in recent_games:
+                meta = g.get('meta', {})
+                adv_stats = meta.get('advanced_stats', {})
+
+                home_xg = adv_stats.get('home_xG')
+                away_xg = adv_stats.get('away_xG')
+
+                if home_xg is not None and away_xg is not None:
+                    home_values.append(float(home_xg))
+                    away_values.append(float(away_xg))
+
+            if home_values and away_values:
+                avg_home = np.mean(home_values)
+                avg_away = np.mean(away_values)
+                model_type = 'poisson_xg_v2'
+            else:
+                # Fallback to actual goals
+                print("⚠️ xG data incomplete, falling back to actual goals")
+                home_values = [g['home_score'] for g in recent_games]
+                away_values = [g['away_score'] for g in recent_games]
+                avg_home = np.mean(home_values)
+                avg_away = np.mean(away_values)
+                model_type = 'poisson_v1'
+        else:
+            # Use actual goals
+            print(f"📊 Using actual goals for training")
+            home_values = [g['home_score'] for g in recent_games]
+            away_values = [g['away_score'] for g in recent_games]
+            avg_home = np.mean(home_values)
+            avg_away = np.mean(away_values)
+            model_type = 'poisson_v1'
 
         # Apply home advantage factor
         self.lambda_home = avg_home * HOME_ADVANTAGE_FACTOR
@@ -48,7 +96,7 @@ class PoissonModel:
 
         # Store model
         self.model_pred.create(
-            model='poisson_v1',
+            model=model_type,
             scope=scope,
             lambda_home=self.lambda_home,
             lambda_away=self.lambda_away,
@@ -57,16 +105,21 @@ class PoissonModel:
                 'n_games': len(recent_games),
                 'avg_home_raw': float(avg_home),
                 'avg_away_raw': float(avg_away),
-                'home_advantage_factor': HOME_ADVANTAGE_FACTOR
+                'home_advantage_factor': HOME_ADVANTAGE_FACTOR,
+                'used_xg': use_xg and has_xg_data,
+                'xg_games_available': len([g for g in recent_games
+                                          if g.get('meta', {}).get('advanced_stats', {}).get('home_xG')])
             }
         )
 
         print(f"✅ Model trained: λ_home={self.lambda_home:.2f}, λ_away={self.lambda_away:.2f}")
-        print(f"   ({len(recent_games)} games, {lookback_days} days)")
+        print(f"   Type: {model_type}")
+        print(f"   Data: ({len(recent_games)} games, {lookback_days} days)")
 
         return {
             'lambda_home': self.lambda_home,
-            'lambda_away': self.lambda_away
+            'lambda_away': self.lambda_away,
+            'model_type': model_type
         }
 
     def load_latest_model(self, scope: str = "global") -> bool:

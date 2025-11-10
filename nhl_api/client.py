@@ -27,13 +27,14 @@ class NHLAPIClient:
 
     def get_schedule(self, date: str) -> List[Dict[str, Any]]:
         """
-        Get schedule for a specific date.
+        Get schedule for a specific date ONLY.
+        NHL API returns a whole week, so we filter to exact date.
 
         Args:
             date: Date string in format YYYY-MM-DD
 
         Returns:
-            List of game dictionaries
+            List of game dictionaries for ONLY that specific date
         """
         url = NHL_SCHEDULE_ENDPOINT.format(date=date)
         data = self._get(url)
@@ -41,12 +42,12 @@ class NHLAPIClient:
         if not data or 'gameWeek' not in data:
             return []
 
-        games = []
+        # Filter to get ONLY the requested date
         for day in data.get('gameWeek', []):
-            for game in day.get('games', []):
-                games.append(game)
+            if day.get('date') == date:
+                return day.get('games', [])
 
-        return games
+        return []  # No games found for this date
 
     def get_yesterday_games(self) -> List[Dict[str, Any]]:
         """Get yesterday's games."""
